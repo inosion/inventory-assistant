@@ -38,7 +38,7 @@ jobs:
         with:
           src: tools/yaml-import
       - run: ruff format --check .
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt && python inventree_import.py --help
