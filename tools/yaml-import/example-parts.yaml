@@ -1,0 +1,53 @@
+# Example catalogue for inventree_import.py.
+#
+# locations: one entry per box/shelf (becomes an InvenTree stock location; `parent` nests it).
+# parts:     one entry per distinct part.
+#   id        unique, becomes the part IPN (the key that makes re-runs idempotent)
+#   name      display name (truncated to 100 chars; full text kept in the description)
+#   category  slug, mapped through CATEGORY_NAMES or the optional `categories:` section below
+#   qty, location   one stock item of qty at that location
+#   photos    optional, relative to --photo-root; the first becomes the part image, all are attached
+#   notes     optional markdown
+#   anything else scalar (chip, sku, voltage, confidence, ...) becomes a part parameter
+
+categories:            # optional: extra/overridden slug -> category path
+  dev-board: Microcontrollers/Dev boards
+
+locations:
+  A1:
+    description: Clear tub A1 - microcontrollers
+  B1:
+    description: Grey storage box B1 - power
+  B1-cables:
+    description: Cable bag inside B1
+    parent: B1
+
+parts:
+  - id: arduino-uno-r3
+    name: Arduino Uno R3
+    category: microcontroller
+    chip: ATmega328P
+    qty: 2
+    location: A1
+    confidence: high
+
+  - id: esp32-devkitc
+    name: ESP32-DevKitC V4 (WROOM-32)
+    category: dev-board
+    chip: ESP32-D0WD
+    qty: 3
+    location: A1
+    notes: One has a bent pin 23.
+
+  - id: lm2596-buck
+    name: LM2596 DC-DC buck converter module
+    category: power
+    output: 1.25-35 V, 3 A
+    qty: 4
+    location: B1
+
+  - id: usb-a-micro-1m
+    name: USB-A to micro-USB cable, 1 m
+    category: cable
+    qty: 6
+    location: B1-cables

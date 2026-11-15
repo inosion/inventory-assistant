@@ -1,0 +1,55 @@
+# TLS terminator + router for InvenTree and inventory-assistant.
+#
+# TLS: by default Caddy issues a certificate from its own local CA (`tls internal`); devices
+# must trust it (root at data/caddy/caddy/pki/authorities/local/root.crt). To use your own
+# certificate instead, put fullchain.pem + privkey.pem in ./ssl and replace the tls line with:
+#     tls /certs/fullchain.pem /certs/privkey.pem
+# For a public hostname, delete the tls line and Caddy will use Let's Encrypt.
+{
+	auto_https disable_redirects
+}
+
+# internal healthcheck (not published)
+:9090 {
+	handle /api/system/health/* {
+		reverse_proxy inventree-server:8000
+	}
+	handle {
+		respond 404
+	}
+}
+
+https://{$SITE_HOST}:443 {
+	tls internal
+
+	encode gzip
+	request_body {
+		max_size 100MB
+	}
+
+	handle_path /static/* {
+		root * /var/www/static
+		file_server
+	}
+
+	handle_path /media/* {
+		root * /var/www/media
+		file_server
+		header Content-Disposition attachment
+		forward_auth inventree-server:8000 {
+			uri /auth/
+		}
+	}
+
+	# Capture app: the UI shell is public, its API requires an InvenTree login (session cookie).
+	redir /capture /capture/
+	handle_path /capture/* {
+		@api path /api/*
+		forward_auth @api inventree-server:8000 {
+			uri /auth/
+		}
+		reverse_proxy inventory-assistant:3000
+	}
+
+	reverse_proxy inventree-server:8000
+}

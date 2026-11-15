@@ -1,0 +1,141 @@
+# Complete, self-hosted stack: InvenTree + inventory-assistant + SearXNG behind Caddy (HTTPS).
+#
+#   cp env.example .env   # fill in the CHANGE_ME values
+#   docker compose up -d
+#
+# InvenTree:        https://<SITE_HOST>:<HTTPS_PORT>/
+# Capture app:      https://<SITE_HOST>:<HTTPS_PORT>/capture/
+# Vision model:     Ollama, on the host by default (OLLAMA_URL), or `--profile ollama` to run it here.
+# Based on InvenTree's upstream contrib/container/docker-compose.yml.
+name: ${COMPOSE_PROJECT_NAME:-inventree}
+
+services:
+  inventree-db:
+    image: postgres:17
+    container_name: inventree-db
+    environment:
+      - PGDATA=/var/lib/postgresql/data/pgdb
+      - POSTGRES_USER=${INVENTREE_DB_USER:?set in .env}
+      - POSTGRES_PASSWORD=${INVENTREE_DB_PASSWORD:?set in .env}
+      - POSTGRES_DB=${INVENTREE_DB_NAME:?set in .env}
+    volumes:
+      - ./data:/var/lib/postgresql/data/
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  inventree-cache:
+    image: redis:7-alpine
+    container_name: inventree-cache
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  inventree-server:
+    image: inventree/inventree:${INVENTREE_TAG:?set in .env}
+    container_name: inventree-server
+    depends_on:
+      inventree-db: {condition: service_healthy}
+      inventree-cache: {condition: service_healthy}
+    env_file: [.env]
+    environment:
+      INVENTREE_SERVER: http://inventree-server:8000
+    volumes:
+      - ./data:/home/inventree/data
+    healthcheck:
+      test: ['CMD-SHELL', 'invoke server-health --address "http://localhost:8000"']
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  inventree-worker:
+    image: inventree/inventree:${INVENTREE_TAG:?set in .env}
+    container_name: inventree-worker
+    command: invoke worker
+    depends_on:
+      inventree-server: {condition: service_healthy}
+    env_file: [.env]
+    volumes:
+      - ./data:/home/inventree/data
+    healthcheck:
+      test: ['CMD-SHELL', 'invoke worker-health']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    restart: unless-stopped
+
+  # AI-assisted photo-first capture, served at /capture/
+  inventory-assistant:
+    image: ghcr.io/inosion/inventory-assistant:${ASSISTANT_TAG:-latest}
+    build: ..
+    container_name: inventory-assistant
+    depends_on:
+      inventree-server: {condition: service_healthy}
+    environment:
+      INVENTREE_URL: http://inventree-server:8000
+      INVENTREE_TOKEN: ${ASSISTANT_INVENTREE_TOKEN:?set in .env}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      SEARXNG_URL: http://inventree-searxng:8080
+      RESEARCH_POLICY: ${RESEARCH_POLICY:-markings}
+      TZ: ${INVENTREE_TIMEZONE:-UTC}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./data/assistant:/data
+    restart: unless-stopped
+
+  # Self-hosted metasearch for researching part markings. Internal only (not published).
+  inventree-searxng:
+    image: searxng/searxng:2026.11.1-10db664f1
+    container_name: inventree-searxng
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set in .env}
+    volumes:
+      - ./searxng:/etc/searxng
+    restart: unless-stopped
+
+  # Optional: run the vision model in the stack (`docker compose --profile ollama up -d`,
+  # then `docker compose exec ollama ollama pull qwen3.5:4b` and set OLLAMA_URL=http://ollama:11434).
+  ollama:
+    profiles: [ollama]
+    image: ollama/ollama:latest
+    container_name: inventree-ollama
+    volumes:
+      - ./data/ollama:/root/.ollama
+    restart: unless-stopped
+
+  inventree-proxy:
+    image: caddy:2-alpine
+    container_name: inventree-proxy
+    depends_on:
+      inventree-server: {condition: service_healthy}
+    environment:
+      SITE_HOST: ${SITE_HOST:-localhost}
+    ports:
+      - ${HTTPS_PORT:-8443}:443
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./ssl:/certs:ro
+      - ./data/static:/var/www/static
+      - ./data/media:/var/www/media
+      - ./data/caddy:/data
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:9090/api/system/health/']
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped

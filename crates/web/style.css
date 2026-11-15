@@ -1,0 +1,63 @@
+:root {
+  --bg: #f4f2ee; --fg: #17181b; --muted: #6b6e75; --card: #ffffff; --line: #dedad3;
+  --accent: #e08a12; --accent-fg: #17181b; --bad: #c0392b; --ok: #2e7d4f;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14161a; --fg: #eceae6; --muted: #9a9ea6; --card: #1e2127; --line: #30343c;
+          --accent: #f2a33a; --accent-fg: #14161a; --bad: #ef6b5b; --ok: #6cc28f; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+.app { max-width: 560px; margin: 0 auto; padding: max(12px, env(safe-area-inset-top)) 16px 40px; }
+button { font: inherit; color: inherit; cursor: pointer; }
+.banner { background: var(--bad); color: #fff; padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; }
+.banner a { color: #fff; font-weight: 600; }
+.banner.info { background: var(--card); color: var(--fg); border: 1px solid var(--line); }
+
+.box { width: 100%; display: flex; align-items: baseline; gap: 10px; padding: 14px 16px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px; text-align: left; }
+.box .lbl { color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: .06em; }
+.box .boxname { font-size: 30px; font-weight: 750; flex: 1; overflow-wrap: anywhere; }
+.box .chg { color: var(--accent); font-size: 14px; }
+
+.shutter { margin: 16px 0 12px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; height: 38vh; min-height: 200px; max-height: 340px; border-radius: 22px;
+  background: var(--accent); color: var(--accent-fg); font-weight: 750; font-size: 22px; user-select: none; }
+.shutter:active { transform: scale(.98); }
+.shutter.disabled { opacity: .35; pointer-events: none; }
+.shutter input { display: none; }
+.shutter svg { width: 88px; height: 88px; fill: currentColor; }
+
+.qty { display: flex; align-items: center; gap: 8px; }
+.qty span { flex: 1; text-align: center; font-size: 18px; font-weight: 600; }
+.qty button { min-width: 56px; height: 48px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); font-size: 22px; }
+.qty .x10 { font-size: 16px; }
+
+.stats { margin: 14px 2px 8px; color: var(--muted); font-size: 14px; }
+.shots { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.shots li { display: flex; gap: 10px; align-items: center; padding: 6px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 12px; }
+.shots li.failed { border-color: var(--bad); }
+.shots img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; background: var(--line); flex: none; }
+.shots .txt { min-width: 0; }
+.shots .t { font-weight: 600; overflow-wrap: anywhere; }
+.shots li.failed .t { color: var(--bad); }
+.shots .s { color: var(--muted); font-size: 13px; }
+.shots a { color: var(--accent); }
+
+.picker { position: fixed; inset: 0; background: rgb(0 0 0 / .45); display: flex; align-items: flex-start; z-index: 10; }
+.sheet { width: 100%; max-width: 560px; margin: 0 auto; max-height: 100%; overflow-y: auto; background: var(--bg);
+  padding: max(12px, env(safe-area-inset-top)) 16px 24px; border-radius: 0 0 18px 18px; }
+.row { display: flex; gap: 8px; }
+.search { flex: 1; min-width: 0; font: inherit; font-size: 22px; padding: 12px 14px; border-radius: 12px;
+  border: 2px solid var(--accent); background: var(--card); color: var(--fg); text-transform: uppercase; }
+.close { width: 52px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); font-size: 20px; }
+.create { width: 100%; margin-top: 10px; padding: 14px; border-radius: 12px; border: 0;
+  background: var(--accent); color: var(--accent-fg); font-weight: 700; font-size: 18px; }
+.cloud { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.tag { padding: 10px 14px; min-height: 48px; border-radius: 999px; border: 1px solid var(--line); background: var(--card);
+  font-size: 18px; font-weight: 600; }
+.tag small { color: var(--muted); font-weight: 400; margin-left: 4px; }
+.tag.cur { border-color: var(--accent); outline: 2px solid var(--accent); }

@@ -1,0 +1,23 @@
+[package]
+name = "inventory-assistant"
+version.workspace = true
+description = "AI-assisted photo-first capture service for InvenTree"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8.9", features = ["multipart"] }
+base64 = "0.22"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+chrono = { version = "0.4.45", features = ["serde", "clock"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.54", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.29", features = ["v4"] }

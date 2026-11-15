@@ -1,0 +1,9 @@
+# SearXNG for inventory-assistant (internal only, not published). Defaults + JSON API, no rate limiter.
+use_default_settings: true
+server:
+  limiter: false
+  image_proxy: false
+  public_instance: false
+search:
+  safe_search: 0
+  formats: [html, json]
