@@ -1,5 +1,5 @@
 # inventory-assistant: Rust (axum) server + Rust/Leptos wasm UI in one small image.
-FROM rust:1.99-slim-bookworm AS build
+FROM rust:1.100-slim-bookworm AS build
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
