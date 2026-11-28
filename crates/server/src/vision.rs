@@ -80,6 +80,14 @@ pub fn model_image(path: &Path) -> Result<String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
 }
 
+/// A small JPEG for the capture log (the full photo is deleted once identification is final).
+pub fn thumbnail(photo: &[u8]) -> Result<Vec<u8>> {
+    let img = image::load_from_memory(photo)?.thumbnail(200, 200);
+    let mut buf = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 70).encode_image(&img.to_rgb8())?;
+    Ok(buf.into_inner())
+}
+
 pub struct Vision {
     http: Client,
     url: String,
@@ -92,6 +100,11 @@ impl Vision {
     }
 
     pub async fn ask(&self, prompt: &str, image_b64: &str) -> Result<Guess> {
+        Guess::parse(&self.chat(prompt, &[image_b64]).await?)
+    }
+
+    /// One JSON-mode chat turn; returns the raw content.
+    pub async fn chat(&self, prompt: &str, images: &[&str]) -> Result<String> {
         let req = json!({
             "model": self.model,
             "stream": false,
@@ -99,7 +112,7 @@ impl Vision {
             "format": "json",
             // num_predict caps runaway generations (seen: 1400+ tokens of rambling from small models)
             "options": {"temperature": 0.2, "num_predict": 400, "num_ctx": 8192},
-            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+            "messages": [{"role": "user", "content": prompt, "images": images}],
         });
         let resp: Value = self
             .http
@@ -111,7 +124,7 @@ impl Vision {
             .error_for_status()?
             .json()
             .await?;
-        Guess::parse(resp["message"]["content"].as_str().context("no content from model")?)
+        Ok(resp["message"]["content"].as_str().context("no content from model")?.to_string())
     }
 }
 

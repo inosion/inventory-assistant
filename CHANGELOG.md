@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Don't know** tab: snap an item without choosing a box. It is stocked in an `Inbox` location, identified, and
+  then gets up to 3 box suggestions, based on what the other boxes already hold (same category, similar names,
+  matching box name) and chosen by the model with a reason. Pick a suggestion or another box, confirm, and the
+  stock moves there (`POST api/jobs/{id}/file`). Waiting items stay in a *To store* list, filed ones move to *Stored*.
+- Duplicate check: a capture of a part already in InvenTree is merged into it (photo added as an attachment,
+  qty added to its stock in the box) and the new part is removed. `DEDUP=off` disables it.
+- The capture logs persist across reloads, with server-side thumbnails (`GET api/thumb/{id}`): the last 100
+  Store captures and the last 100 filed items. Older finished entries are pruned from the spool.
+
 ## [0.1.0] - 2026-11-16
 
 First public release, extracted from a working home deployment.

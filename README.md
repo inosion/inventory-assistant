@@ -81,6 +81,7 @@ TLS, existing installs and upgrades.
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
 | `OLLAMA_MODEL` | `qwen3.5:4b` | Any vision-capable Ollama model |
 | `SEARXNG_URL` | *(unset = no research)* | SearXNG with the JSON format enabled |
+| `DEDUP` | `on` | Merge captures of parts already in InvenTree into them (photo attached, stock added) · `off` |
 | `RESEARCH_POLICY` | `markings` | `markings`: research everything with part numbers · `low`: only low-confidence items · `off` |
 | `DATA_DIR` | `./spool` | Queue directory (keep it on a volume) |
 | `LISTEN` | `0.0.0.0:3000` | Bind address |

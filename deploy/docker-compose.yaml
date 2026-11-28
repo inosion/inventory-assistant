@@ -90,6 +90,7 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
       SEARXNG_URL: http://inventree-searxng:8080
       RESEARCH_POLICY: ${RESEARCH_POLICY:-markings}
+      DEDUP: ${DEDUP:-on}
       TZ: ${INVENTREE_TIMEZONE:-UTC}
     extra_hosts:
       - host.docker.internal:host-gateway

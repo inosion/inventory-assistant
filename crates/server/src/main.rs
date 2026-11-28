@@ -8,15 +8,20 @@
 //!    (after 3 failed tries it is `unnamed` and simply stays in Inbox).
 //! 3. `research -> named`: items with part-number-like markings are web-searched (self-hosted
 //!    SearXNG) and the model is re-asked with the photo + results.
+//! 4. duplicate check: a capture of a part already in InvenTree is merged into it (photo attached,
+//!    stock added) and the new part is removed.
+//! 5. "Don't know" captures (parked in the Inbox location) get box suggestions.
 //!
 //! InvenTree is the source of truth; the spool is only a durable queue + recent-activity log.
 
 mod api;
 mod config;
+mod dedup;
 mod inventree;
 mod pipeline;
 mod research;
 mod spool;
+mod suggest;
 mod vision;
 
 use std::{sync::Arc, time::Duration};
@@ -45,12 +50,14 @@ async fn main() -> Result<()> {
         searx: cfg.searxng_url.clone().map(|u| Arc::new(Searx::new(http.clone(), u))),
         spool: spool.clone(),
         research: cfg.research,
+        dedup: cfg.dedup,
         wake: wake.clone(),
     };
     tracing::info!(
-        "model {} at {}; research {:?} via {}",
+        "model {} at {}; dedup {}; research {:?} via {}",
         cfg.model,
         cfg.ollama_url,
+        if cfg.dedup { "on" } else { "off" },
         cfg.research,
         cfg.searxng_url.as_deref().unwrap_or("(disabled)")
     );

@@ -36,6 +36,8 @@ pub struct Config {
     pub model: String,
     pub searxng_url: Option<String>,
     pub research: ResearchPolicy,
+    /// Merge captures of parts that are already in InvenTree into them (`DEDUP=off` to disable).
+    pub dedup: bool,
 }
 
 fn env(k: &str, default: &str) -> String {
@@ -58,6 +60,7 @@ impl Config {
             model: env("OLLAMA_MODEL", "qwen3.5:4b"),
             searxng_url: std::env::var("SEARXNG_URL").ok().filter(|s| !s.trim().is_empty()).map(trim_url),
             research: ResearchPolicy::parse(&env("RESEARCH_POLICY", "markings")),
+            dedup: !matches!(env("DEDUP", "on").trim().to_ascii_lowercase().as_str(), "off" | "false" | "0" | "no"),
         })
     }
 }

@@ -14,7 +14,8 @@
 ## Request path
 
 1. The PWA decodes the photo (honouring EXIF orientation), re-encodes it as a JPEG of at most 1600 px **on the phone**,
-   and `POST`s `api/capture` (multipart: `photo`, `location`, `location_name`, `qty`).
+   and `POST`s `api/capture` (multipart: `photo`, `qty`, `mode`; for `mode=store` also `location`, `location_name`).
+   `mode=sort` is the *Don't know* tab: no box yet.
 2. Caddy checks the user's InvenTree session against `inventree-server:8000/auth/` and only then proxies to the
    service. The service itself talks to InvenTree with its own API token.
 3. The service writes `<id>.jpg` + `<id>.json` to the spool and returns the job. Nothing else happens on the
@@ -30,13 +31,20 @@ A single worker loops over the spool and does **one unit of work** per step, alw
 | `stored` | `named` / `research` | Downscale to ≤1024 px, ask the model (`format: json`, `temperature 0.2`, `num_predict 400`). Write name, description and notes, and move to the mapped category unless confidence is `low`. |
 | `research` | `named` | Extract part-number-like tokens from the markings, query SearXNG (≤3 queries, ≤10 de-duplicated results), and re-ask the model with photo + results. Sources go into the notes. |
 | `stored` | `unnamed` | After 3 failed identifications. The part stays in *Inbox*. |
+| `named` | (duplicate checked) | Search InvenTree for the AI name and part numbers. An identical name, or a `high`-confidence model match, means it is already there: the photo becomes an attachment of that part, the qty is added to its stock in the box, and the new part is deleted. `merged_into` is saved before the cleanup, so retries never add stock twice. `DEDUP=off` skips this. |
+| *Don't know* captures | (suggested) | Rank the boxes by what they hold (same category ×3, similar part names ×2, box name matches ×4), let the model pick up to 3 from the top 12 with a reason, and top up from the ranking. Boxes that already hold a merged part come first. |
+
+*Don't know* captures are stocked at the `Inbox` location (hidden from the box picker). Once the user picks a box and
+confirms, `POST api/jobs/{id}/file` moves the stock there, adding to that part's existing stock item in the box if it
+has one. The worker never overwrites a filing done while it was busy with the same job.
 
 Because *store* always wins, a burst of captures is in InvenTree within seconds while identification
 (about 10 s per photo on a CPU with a 4B model) works through the backlog. The worker wakes as soon as a capture
 arrives, and every 30 s otherwise.
 
-Photos are deleted from the spool once a job is final. The JSON files stay as a small activity log
-(`GET api/recent` returns the newest 80).
+Photos are deleted from the spool once the duplicate check is done. A 200 px thumbnail and the JSON file stay as the
+activity log: `GET api/recent` returns the last 100 Store captures, every *Don't know* item still waiting, and the last
+100 filed ones. Older finished entries are pruned when the worker is idle.
 
 ## Why research by default?
 
