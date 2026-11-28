@@ -1,4 +1,5 @@
-//! Durable on-disk job queue. One `<id>.json` (+ `<id>.jpg` while the photo is still needed) per capture.
+//! Durable on-disk job queue. One `<id>.json` per capture, plus its photos (`<id>.jpg`, `<id>-2.jpg`, …) while
+//! they are still needed and a small `<id>.thumb.jpg` for the activity log.
 //!
 //! InvenTree is the source of truth; the spool is only a crash-safe queue and a recent-activity log.
 
@@ -46,6 +47,9 @@ pub struct Suggestion {
     pub reason: String,
 }
 
+/// Photos per capture: more add little for identification and slow the model down.
+pub const MAX_PHOTOS: usize = 4;
+
 /// How many finished entries each log keeps (Store captures, and filed Sort captures).
 pub const KEEP: usize = 100;
 
@@ -59,6 +63,12 @@ pub struct Job {
     pub location: Option<i64>,
     pub location_name: String,
     pub qty: f64,
+    /// Photos of the item (all shown to the model together). Job files from before this existed had one.
+    #[serde(default = "one")]
+    pub photos: u32,
+    /// How many of the extra photos (2nd onwards) are attached to the part, so a retry never repeats one.
+    #[serde(default)]
+    pub attached: u32,
     pub status: Status,
     pub part: Option<i64>,
     pub name: Option<String>,
@@ -90,8 +100,12 @@ fn yes() -> bool {
     true
 }
 
+fn one() -> u32 {
+    1
+}
+
 impl Job {
-    pub fn new(mode: Mode, location: Option<i64>, location_name: String, qty: f64) -> Self {
+    pub fn new(mode: Mode, location: Option<i64>, location_name: String, qty: f64, photos: u32) -> Self {
         Job {
             id: uuid::Uuid::new_v4().simple().to_string(),
             created: Utc::now(),
@@ -99,6 +113,8 @@ impl Job {
             location,
             location_name,
             qty,
+            photos: photos.max(1),
+            attached: 0,
             status: Status::Queued,
             part: None,
             name: None,
@@ -154,8 +170,17 @@ impl Spool {
         self.dir.join(format!("{id}.json"))
     }
 
-    pub fn photo_path(&self, job: &Job) -> PathBuf {
-        self.dir.join(format!("{}.jpg", job.id))
+    /// The `n`th photo (0-based). The first keeps the original single-photo name.
+    fn photo_file(&self, id: &str, n: u32) -> PathBuf {
+        match n {
+            0 => self.dir.join(format!("{id}.jpg")),
+            _ => self.dir.join(format!("{id}-{}.jpg", n + 1)),
+        }
+    }
+
+    /// All of the job's photos, in the order they were taken.
+    pub fn photo_paths(&self, job: &Job) -> Vec<PathBuf> {
+        (0..job.photos.max(1)).map(|n| self.photo_file(&job.id, n)).collect()
     }
 
     /// Small JPEG kept for the activity log after the photo itself is gone.
@@ -206,13 +231,18 @@ impl Spool {
         Ok(())
     }
 
-    pub fn put_photo(&self, job: &Job, bytes: &[u8]) -> Result<()> {
-        Ok(std::fs::write(self.photo_path(job), bytes)?)
+    pub fn put_photos(&self, job: &Job, photos: &[impl AsRef<[u8]>]) -> Result<()> {
+        for (n, p) in photos.iter().enumerate() {
+            std::fs::write(self.photo_file(&job.id, n as u32), p)?;
+        }
+        Ok(())
     }
 
-    /// The photo is only kept until identification is final.
-    pub fn drop_photo(&self, job: &Job) {
-        let _ = std::fs::remove_file(self.photo_path(job));
+    /// The photos are only kept until the duplicate check is done.
+    pub fn drop_photos(&self, job: &Job) {
+        for p in self.photo_paths(job) {
+            let _ = std::fs::remove_file(p);
+        }
     }
 
     /// Drops the oldest finished entries so each log keeps at most `keep`: Store captures that are
@@ -228,7 +258,7 @@ impl Spool {
         filed.sort_by_key(|j| std::cmp::Reverse(j.filed));
         doomed.extend(filed.into_iter().skip(keep));
         for j in &doomed {
-            let _ = std::fs::remove_file(self.photo_path(j));
+            self.drop_photos(j);
             let _ = std::fs::remove_file(self.thumb_path(&j.id));
             std::fs::remove_file(self.json_path(&j.id))?;
         }
@@ -270,9 +300,9 @@ mod tests {
     fn save_and_reload_in_creation_order() {
         let dir = tmpdir();
         let spool = Spool::open(&dir).unwrap();
-        let mut a = Job::new(Mode::Store, Some(1), "A1".into(), 1.0);
+        let mut a = Job::new(Mode::Store, Some(1), "A1".into(), 1.0, 1);
         a.created = Utc::now() - chrono::Duration::seconds(10);
-        let b = Job::new(Mode::Store, Some(2), "B1/cables".into(), 3.0);
+        let b = Job::new(Mode::Store, Some(2), "B1/cables".into(), 3.0, 1);
         spool.save(&b).unwrap();
         spool.save(&a).unwrap();
         std::fs::write(dir.join("garbage.json"), b"not json").unwrap();
@@ -301,6 +331,21 @@ mod tests {
         assert_eq!(j.location, Some(1));
         assert!(j.suggestions.is_none() && j.filed.is_none() && j.stock.is_none());
         assert!(j.dup_checked && j.merged_into.is_none(), "old jobs must not be re-checked for duplicates");
+        assert_eq!((j.photos, j.attached), (1, 0));
+    }
+
+    #[test]
+    fn multi_photo_files_are_named_in_order_and_dropped_together() {
+        let dir = tmpdir();
+        let spool = Spool::open(&dir).unwrap();
+        let j = Job::new(Mode::Store, Some(1), "A1".into(), 1.0, 3);
+        spool.put_photos(&j, &[b"a".as_slice(), b"b", b"c"]).unwrap();
+        let names: Vec<String> = spool.photo_paths(&j).iter().map(|p| p.file_name().unwrap().to_string_lossy().into()).collect();
+        assert_eq!(names, vec![format!("{}.jpg", j.id), format!("{}-2.jpg", j.id), format!("{}-3.jpg", j.id)]);
+        assert_eq!(std::fs::read(&spool.photo_paths(&j)[1]).unwrap(), b"b");
+        spool.drop_photos(&j);
+        assert!(spool.photo_paths(&j).iter().all(|p| !p.exists()));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -313,7 +358,7 @@ mod tests {
     fn worker_save_keeps_a_filing_done_meanwhile() {
         let dir = tmpdir();
         let spool = Spool::open(&dir).unwrap();
-        let mut j = Job::new(Mode::Sort, Some(9), "Inbox".into(), 1.0);
+        let mut j = Job::new(Mode::Sort, Some(9), "Inbox".into(), 1.0, 1);
         spool.save(&j).unwrap();
         spool
             .update(&j.id, |d| {
@@ -337,7 +382,7 @@ mod tests {
         let spool = Spool::open(&dir).unwrap();
         let t0 = Utc::now() - chrono::Duration::hours(1);
         let mk = |mode, i: i64, status, filed: bool| {
-            let mut j = Job::new(mode, Some(1), "A1".into(), 1.0);
+            let mut j = Job::new(mode, Some(1), "A1".into(), 1.0, 1);
             j.created = t0 + chrono::Duration::seconds(i);
             j.status = status;
             j.filed = filed.then(|| t0 + chrono::Duration::seconds(i));

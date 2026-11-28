@@ -80,3 +80,19 @@ h3 { margin: 18px 2px 8px; font-size: 14px; color: var(--muted); text-transform:
 .confirm { width: 100%; height: 48px; border: 0; border-radius: 12px; background: var(--ok); color: #fff;
   font-weight: 700; font-size: 17px; }
 .for { margin-bottom: 8px; font-weight: 650; }
+
+.tray { margin-top: 14px; padding: 10px; background: var(--card); border: 2px dashed var(--accent); border-radius: 14px;
+  display: grid; gap: 10px; }
+.tray .hd { display: flex; justify-content: space-between; align-items: center; font-weight: 650; }
+.tray .discard { border: 0; background: none; color: var(--muted); text-decoration: underline; font-size: 14px; }
+.tray .photos { display: flex; gap: 8px; flex-wrap: wrap; }
+.tp { position: relative; width: 64px; height: 64px; }
+.tp img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; background: var(--line); }
+.tp.busy img { opacity: .5; }
+.tp.bad img { outline: 2px solid var(--bad); }
+.tp .rm { position: absolute; top: -6px; right: -6px; width: 24px; height: 24px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--card); font-size: 15px; line-height: 1; }
+.tray .save { height: 52px; border: 0; border-radius: 12px; background: var(--ok); color: #fff; font-weight: 700; font-size: 18px; }
+.tray .save:disabled { opacity: .5; }
+.shutter.secondary { height: 76px; min-height: 0; flex-direction: row; gap: 10px; font-size: 18px; margin-top: 10px; }
+.shutter.secondary svg { width: 34px; height: 34px; }

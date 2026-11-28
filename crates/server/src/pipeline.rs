@@ -74,7 +74,7 @@ impl Pipeline {
         if let Some(mut j) = next(Status::Stored) {
             match self.identify(&mut j).await {
                 Ok(()) => {
-                    // the photo stays until the duplicate check (it may become an attachment)
+                    // the photos stay until the duplicate check (they may become attachments)
                     j.error = None;
                     j.attempts = 0;
                 }
@@ -83,7 +83,7 @@ impl Pipeline {
                     j.fail(format!("{e:#}"));
                     if j.attempts >= MAX_ATTEMPTS {
                         j.status = Status::Unnamed;
-                        self.spool.drop_photo(&j);
+                        self.spool.drop_photos(&j);
                     } else {
                         tokio::time::sleep(Duration::from_secs(5)).await;
                     }
@@ -124,7 +124,7 @@ impl Pipeline {
                 j.dup_checked = true;
                 j.attempts = 0;
                 j.error = None;
-                self.spool.drop_photo(&j);
+                self.spool.drop_photos(&j);
             }
             self.spool.save_from_worker(&j)?;
             if !done {
@@ -159,10 +159,11 @@ impl Pipeline {
         Ok(false)
     }
 
-    /// queued → stored: an Inbox part with the photo as its image, and stock at the box
-    /// (`Sort` captures: at the Inbox location).
+    /// queued → stored: an Inbox part with the first photo as its image, any further photos as attachments,
+    /// and stock at the box (`Sort` captures: at the Inbox location).
     async fn store(&self, j: &mut Job) -> Result<()> {
-        let photo = std::fs::read(self.spool.photo_path(j))?;
+        let paths = self.spool.photo_paths(j);
+        let photo = std::fs::read(&paths[0])?;
         if j.mode == Mode::Sort {
             j.location = Some(self.inv.ensure_location(inventree::INBOX).await?);
             j.location_name = inventree::INBOX.to_string();
@@ -177,6 +178,15 @@ impl Pipeline {
         let (pk, stock) = self.inv.create_inbox_part(&ipn, &name, location, j.qty, photo).await?;
         j.part = Some(pk);
         j.stock = Some(stock);
+        // saved after each one, so a retry carries on where it stopped instead of attaching twice
+        while (j.attached as usize) + 1 < paths.len() {
+            let n = j.attached as usize + 1;
+            let bytes = std::fs::read(&paths[n])?;
+            let file = format!("{ipn}-{}.jpg", n + 1);
+            self.inv.attach_photo(pk, bytes, &file, &format!("Quick capture photo {} of {}", n + 1, paths.len())).await?;
+            j.attached += 1;
+            self.spool.save_from_worker(j)?;
+        }
         j.name = Some(name);
         j.status = Status::Stored;
         j.attempts = 0;
@@ -187,8 +197,8 @@ impl Pipeline {
 
     /// stored → named | research: first look by the vision model.
     async fn identify(&self, j: &mut Job) -> Result<()> {
-        let img = vision::model_image(&self.spool.photo_path(j))?;
-        let g = self.vision.ask(&vision::identify_prompt(), &img).await?;
+        let imgs = vision::model_images(&self.spool.photo_paths(j))?;
+        let g = self.vision.ask(&vision::identify_prompt(imgs.len()), &imgs).await?;
         self.apply(j, &g, "").await?;
         j.markings = Some(g.markings.trim().to_string()).filter(|m| !m.is_empty());
 
@@ -212,9 +222,10 @@ impl Pipeline {
             j.status = Status::Named;
             return Ok(());
         }
-        let prompt = vision::research_prompt(&markings, j.name.as_deref().unwrap_or_default(), &research::format_for_prompt(&hits));
-        let img = vision::model_image(&self.spool.photo_path(j))?;
-        let g = self.vision.ask(&prompt, &img).await?;
+        let imgs = vision::model_images(&self.spool.photo_paths(j))?;
+        let prompt =
+            vision::research_prompt(imgs.len(), &markings, j.name.as_deref().unwrap_or_default(), &research::format_for_prompt(&hits));
+        let g = self.vision.ask(&prompt, &imgs).await?;
         let notes = format!("\n\n**Web research** (SearXNG, {} results):\n{}", hits.len(), research::format_sources(&hits));
         self.apply(j, &g, &notes).await?;
         j.sources = hits.into_iter().map(|h| h.url).collect();
@@ -277,8 +288,10 @@ impl Pipeline {
             let location = j.location.context("job has no location")?;
             let when = j.created.with_timezone(&chrono::Local).format("%d %b %H:%M");
             let note = format!("Quick capture {when}: +{} (inventory-assistant)", j.qty);
-            if let Ok(photo) = std::fs::read(self.spool.photo_path(j)) {
-                self.inv.attach_photo(existing.pk, photo, &format!("capture-{}.jpg", &j.id[..10]), &note).await?;
+            for (n, path) in self.spool.photo_paths(j).iter().enumerate() {
+                if let Ok(photo) = std::fs::read(path) {
+                    self.inv.attach_photo(existing.pk, photo, &format!("capture-{}-{}.jpg", &j.id[..10], n + 1), &note).await?;
+                }
             }
             // a "Don't know" capture gets its own stock item in the Inbox, so it can be filed on its own
             let stock = self.inv.add_stock(existing.pk, location, j.qty, j.mode == Mode::Store, &note).await?;

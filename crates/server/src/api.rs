@@ -80,13 +80,13 @@ async fn post_location(State(s): State<ApiState>, Json(body): Json<NewLoc>) -> A
     Ok(Json(json!({"pk": pk, "name": path, "items": 0})))
 }
 
-/// Multipart: `photo` (JPEG), `qty`, `mode` (`store` | `sort`), and for `store` also `location` (pk) and
-/// `location_name`. Spools and returns immediately.
+/// Multipart: one or more `photo` (JPEG, all of the same item, at most `MAX_PHOTOS`), `qty`, `mode`
+/// (`store` | `sort`), and for `store` also `location` (pk) and `location_name`. Spools and returns immediately.
 async fn capture(State(s): State<ApiState>, mut mp: Multipart) -> ApiResult<Json<Job>> {
-    let (mut photo, mut location, mut location_name, mut qty, mut mode) = (None, None, String::new(), 1.0, Mode::Store);
+    let (mut photos, mut location, mut location_name, mut qty, mut mode) = (Vec::new(), None, String::new(), 1.0, Mode::Store);
     while let Some(field) = mp.next_field().await? {
         match field.name().unwrap_or_default() {
-            "photo" => photo = Some(field.bytes().await?),
+            "photo" => photos.push(field.bytes().await?),
             "mode" => {
                 if field.text().await?.trim().eq_ignore_ascii_case("sort") {
                     mode = Mode::Sort
@@ -98,22 +98,29 @@ async fn capture(State(s): State<ApiState>, mut mp: Multipart) -> ApiResult<Json
             _ => {}
         }
     }
-    let photo = photo.context("missing photo")?;
+    if photos.is_empty() {
+        return Err(client_err(StatusCode::BAD_REQUEST, "missing photo"));
+    }
+    if photos.len() > spool::MAX_PHOTOS {
+        return Err(client_err(StatusCode::BAD_REQUEST, &format!("at most {} photos per item", spool::MAX_PHOTOS)));
+    }
+    let n = photos.len() as u32;
     let job = match mode {
-        Mode::Store => Job::new(mode, Some(location.context("missing location")?), location_name, qty),
+        Mode::Store => Job::new(mode, Some(location.context("missing location")?), location_name, qty, n),
         // the worker puts it in the Inbox location
-        Mode::Sort => Job::new(mode, None, inventree::INBOX.to_string(), qty),
+        Mode::Sort => Job::new(mode, None, inventree::INBOX.to_string(), qty, n),
     };
-    s.spool.put_photo(&job, &photo)?;
+    s.spool.put_photos(&job, &photos)?;
     let thumb_path = s.spool.thumb_path(&job.id);
-    let bytes = photo.clone();
+    let bytes = photos[0].clone();
     let thumb = tokio::task::spawn_blocking(move || vision::thumbnail(&bytes).and_then(|t| Ok(std::fs::write(thumb_path, t)?)));
     if let Ok(Err(e)) = thumb.await {
         tracing::warn!("thumbnail {}: {e:#}", job.id); // not fatal: the log just shows no picture
     }
     s.spool.save(&job)?;
     s.wake.notify_one();
-    tracing::info!("captured {} -> {} ({} bytes)", job.id, job.location_name, photo.len());
+    let size: usize = photos.iter().map(|p| p.len()).sum();
+    tracing::info!("captured {} -> {} ({n} photo(s), {size} bytes)", job.id, job.location_name);
     Ok(Json(job))
 }
 
@@ -186,12 +193,12 @@ mod tests {
         let t0 = chrono::Utc::now();
         let mut jobs = Vec::new();
         for i in 0..5 {
-            let mut j = Job::new(Mode::Store, Some(1), "A1".into(), 1.0);
+            let mut j = Job::new(Mode::Store, Some(1), "A1".into(), 1.0, 1);
             j.created = t0 + chrono::Duration::seconds(i);
             jobs.push(j);
         }
         for i in 0..4 {
-            let mut j = Job::new(Mode::Sort, Some(2), "Inbox".into(), 1.0);
+            let mut j = Job::new(Mode::Sort, Some(2), "Inbox".into(), 1.0, 1);
             j.created = t0 + chrono::Duration::seconds(10 + i);
             j.filed = (i % 2 == 0).then(|| t0 + chrono::Duration::seconds(100 - i));
             jobs.push(j);

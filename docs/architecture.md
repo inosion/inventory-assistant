@@ -13,8 +13,9 @@
 
 ## Request path
 
-1. The PWA decodes the photo (honouring EXIF orientation), re-encodes it as a JPEG of at most 1600 px **on the phone**,
-   and `POST`s `api/capture` (multipart: `photo`, `qty`, `mode`; for `mode=store` also `location`, `location_name`).
+1. Snaps collect in a tray for the current item (up to 4 photos). The PWA decodes each photo (honouring EXIF
+   orientation) and re-encodes it as a JPEG of at most 1600 px **on the phone**. **Save item** `POST`s `api/capture`
+   (multipart: one `photo` field per photo, `qty`, `mode`; for `mode=store` also `location`, `location_name`).
    `mode=sort` is the *Don't know* tab: no box yet.
 2. Caddy checks the user's InvenTree session against `inventree-server:8000/auth/` and only then proxies to the
    service. The service itself talks to InvenTree with its own API token.
@@ -27,8 +28,8 @@ A single worker loops over the spool and does **one unit of work** per step, alw
 
 | From | To | Work |
 |---|---|---|
-| `queued` | `stored` | Create part `qc-<id>` in category *Inbox*, upload the photo as its image, add stock of `qty` at the box. Idempotent on retry (found by IPN). |
-| `stored` | `named` / `research` | Downscale to ≤1024 px, ask the model (`format: json`, `temperature 0.2`, `num_predict 400`). Write name, description and notes, and move to the mapped category unless confidence is `low`. |
+| `queued` | `stored` | Create part `qc-<id>` in category *Inbox*, upload the first photo as its image, add stock of `qty` at the box, and attach any further photos (the count is saved after each, so a retry never attaches twice). Idempotent on retry (found by IPN). |
+| `stored` | `named` / `research` | Downscale every photo (≤1024 px, or ≤768 px when there are more than two), send them all in one request saying they show the same item from different sides, and ask the model (`format: json`, `temperature 0.2`, `num_predict 400`). Write name, description and notes, and move to the mapped category unless confidence is `low`. |
 | `research` | `named` | Extract part-number-like tokens from the markings, query SearXNG (≤3 queries, ≤10 de-duplicated results), and re-ask the model with photo + results. Sources go into the notes. |
 | `stored` | `unnamed` | After 3 failed identifications. The part stays in *Inbox*. |
 | `named` | (duplicate checked) | Search InvenTree for the AI name and part numbers. An identical name, or a `high`-confidence model match, means it is already there: the photo becomes an attachment of that part, the qty is added to its stock in the box, and the new part is deleted. `merged_into` is saved before the cleanup, so retries never add stock twice. `DEDUP=off` skips this. |

@@ -18,6 +18,8 @@ use web_sys::{Blob, CanvasRenderingContext2d, HtmlCanvasElement, HtmlInputElemen
 
 /// Entries kept per log (Store captures; filed Don't-know captures). The server keeps the same number.
 const KEEP: usize = 100;
+/// Photos per item; the server enforces the same limit.
+const MAX_PHOTOS: usize = 4;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 struct Loc {
@@ -54,6 +56,17 @@ struct Job {
     /// Set when the capture turned out to be a part already in InvenTree (stock was added to it).
     #[serde(default)]
     merged_into: Option<i64>,
+    #[serde(default)]
+    photos: Option<u32>,
+}
+
+/// A photo in the tray of the item being captured. Its downscaled image is in `TRAY_BLOBS`.
+#[derive(Clone, Debug, PartialEq)]
+struct TrayPhoto {
+    key: u32,
+    thumb: String,
+    ready: bool,
+    error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -76,6 +89,7 @@ struct Shot {
     thumb: String,
     loc: String,
     qty: u32,
+    photos: u32,
     /// Taken in the Don't-know tab.
     sort: bool,
     state: ShotState,
@@ -93,10 +107,12 @@ impl Shot {
     }
 }
 
-/// A downscaled photo with its box (`None` = Don't-know capture) and qty.
-type Pending = (Blob, Option<Loc>, u32);
+/// An item's downscaled photos with its box (`None` = Don't-know capture) and qty.
+type Pending = (Vec<Blob>, Option<Loc>, u32);
 
 thread_local! {
+    /// Downscaled photos in the tray, by `TrayPhoto::key` (blobs can't live in signals).
+    static TRAY_BLOBS: RefCell<HashMap<u32, Blob>> = RefCell::new(HashMap::new());
     /// Downscaled photos not yet accepted by the server, kept so a failed upload can be retried.
     static PENDING: RefCell<HashMap<u32, Pending>> = RefCell::new(HashMap::new());
     static NEXT_KEY: Cell<u32> = const { Cell::new(1) };
@@ -195,7 +211,7 @@ async fn downscale(src: &Blob, max: f64, quality: f64) -> Result<Blob, String> {
     b.dyn_into::<Blob>().map_err(|_| "canvas produced no image".to_string())
 }
 
-async fn upload(blob: &Blob, loc: Option<&Loc>, qty: u32) -> Result<String, ApiErr> {
+async fn upload(blobs: &[Blob], loc: Option<&Loc>, qty: u32) -> Result<String, ApiErr> {
     let fd = web_sys::FormData::new().map_err(|e| ApiErr::Other(js_err(e)))?;
     let add = |k: &str, v: &str| fd.append_with_str(k, v).map_err(|e| ApiErr::Other(js_err(e)));
     match loc {
@@ -207,7 +223,9 @@ async fn upload(blob: &Blob, loc: Option<&Loc>, qty: u32) -> Result<String, ApiE
         None => add("mode", "sort")?,
     }
     add("qty", &qty.to_string())?;
-    fd.append_with_blob_and_filename("photo", blob, "photo.jpg").map_err(|e| ApiErr::Other(js_err(e)))?;
+    for (i, b) in blobs.iter().enumerate() {
+        fd.append_with_blob_and_filename("photo", b, &format!("photo-{}.jpg", i + 1)).map_err(|e| ApiErr::Other(js_err(e)))?;
+    }
     let req = Request::post("api/capture").body(fd).map_err(|e| ApiErr::Other(e.to_string()))?;
     let job: Job = check(req.send().await).await?.json().await.map_err(|e| ApiErr::Other(e.to_string()))?;
     Ok(job.id)
@@ -226,6 +244,8 @@ struct Ctx {
     target: RwSignal<Option<String>>,
     /// Box chosen per Don't-know capture, waiting for "stored" to be confirmed.
     picked: RwSignal<HashMap<String, Loc>>,
+    /// Photos of the item being captured, sent together by "Save item".
+    tray: RwSignal<Vec<TrayPhoto>>,
 }
 
 impl Ctx {
@@ -256,10 +276,10 @@ fn trim(shots: &mut Vec<Shot>, jobs: &HashMap<String, Job>) {
 
 /// Uploads a pending shot and records the outcome on it.
 fn send_shot(c: Ctx, key: u32) {
-    let Some((blob, loc, qty)) = PENDING.with(|p| p.borrow().get(&key).cloned()) else { return };
+    let Some((blobs, loc, qty)) = PENDING.with(|p| p.borrow().get(&key).cloned()) else { return };
     set_state(c, key, ShotState::Uploading);
     spawn_local(async move {
-        let st = match upload(&blob, loc.as_ref(), qty).await {
+        let st = match upload(&blobs, loc.as_ref(), qty).await {
             Ok(id) => {
                 PENDING.with(|p| p.borrow_mut().remove(&key));
                 ShotState::Sent(id)
@@ -312,6 +332,7 @@ fn load_recent(c: Ctx, seed: bool) {
                                 thumb: format!("api/thumb/{}", j.id),
                                 loc: j.location_name.clone(),
                                 qty: j.qty.max(1.0) as u32,
+                                photos: j.photos.unwrap_or(1),
                                 sort: j.mode == "sort",
                                 state: ShotState::Sent(j.id),
                             });
@@ -383,7 +404,7 @@ fn row(c: Ctx, s: Shot) -> impl IntoView {
             },
         },
     };
-    let (loc0, qty) = (s.loc.clone(), s.qty);
+    let (loc0, qty, photos) = (s.loc.clone(), s.qty, s.photos);
     let sub = move || {
         let j = job();
         let loc = j.as_ref().map(|j| j.location_name.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| loc0.clone());
@@ -394,6 +415,9 @@ fn row(c: Ctx, s: Shot) -> impl IntoView {
             (true, false) => {}
         }
         parts.push(format!("qty {qty}"));
+        if photos > 1 {
+            parts.push(format!("{photos} photos"));
+        }
         if let Some(c) = j.as_ref().and_then(|j| j.confidence.clone()) {
             parts.push(c);
         }
@@ -471,6 +495,7 @@ fn App() -> impl IntoView {
         picker: RwSignal::new(false),
         target: RwSignal::new(None),
         picked: RwSignal::new(HashMap::new()),
+        tray: RwSignal::new(vec![]),
     };
     let (tab, set_tab) = signal(load::<Tab>("qc.tab").unwrap_or(Tab::Store));
     let (loc, set_loc) = signal(load::<Loc>("qc.loc"));
@@ -555,9 +580,60 @@ fn App() -> impl IntoView {
         }
     };
 
+    // A snap adds the photo to the tray; "Save item" sends the tray as one item.
     let on_photo = move |ev: web_sys::Event| {
         let input: HtmlInputElement = event_target(&ev);
         let Some(files) = input.files() else { return };
+        for i in 0..files.length() {
+            if c.tray.with_untracked(|t| t.len()) >= MAX_PHOTOS {
+                c.msg.set(format!("An item can have {MAX_PHOTOS} photos at most. Save it, then snap the next one."));
+                break;
+            }
+            let Some(file) = files.get(i) else { continue };
+            let key = next_key();
+            c.tray.update(|t| t.push(TrayPhoto { key, thumb: String::new(), ready: false, error: None }));
+            let set = move |f: &dyn Fn(&mut TrayPhoto)| {
+                c.tray.update(|t| {
+                    if let Some(p) = t.iter_mut().find(|p| p.key == key) {
+                        f(p)
+                    }
+                })
+            };
+            spawn_local(async move {
+                let blob: Blob = file.into();
+                if let Ok(t) = downscale(&blob, 160.0, 0.7).await {
+                    let url = web_sys::Url::create_object_url_with_blob(&t).unwrap_or_default();
+                    set(&|p| p.thumb = url.clone());
+                }
+                match downscale(&blob, 1600.0, 0.85).await {
+                    Ok(small) => {
+                        TRAY_BLOBS.with(|b| b.borrow_mut().insert(key, small));
+                        set(&|p| p.ready = true);
+                    }
+                    Err(e) => set(&|p| p.error = Some(format!("couldn't read photo: {e}"))),
+                }
+            });
+        }
+        input.set_value("");
+    };
+
+    let drop_from_tray = move |key: u32| {
+        TRAY_BLOBS.with(|b| b.borrow_mut().remove(&key));
+        c.tray.update(|t| t.retain(|p| p.key != key));
+    };
+    let discard_tray = move || {
+        for p in c.tray.get_untracked() {
+            drop_from_tray(p.key);
+        }
+    };
+    let tray_busy = move || c.tray.with(|t| t.iter().any(|p| !p.ready && p.error.is_none()));
+    let tray_usable = move || c.tray.with(|t| t.iter().filter(|p| p.ready).count());
+    let shutter_off = move || (tab.get() == Tab::Store && loc.get().is_none()) || c.tray.with(|t| t.len() >= MAX_PHOTOS);
+
+    let save_item = move || {
+        if tray_busy() || tray_usable() == 0 {
+            return;
+        }
         let sort = tab.get_untracked() == Tab::Sort;
         let l = if sort {
             None
@@ -568,37 +644,22 @@ fn App() -> impl IntoView {
             };
             Some(l)
         };
-        let q = qty.get_untracked();
-        for i in 0..files.length() {
-            let Some(file) = files.get(i) else { continue };
-            let key = next_key();
-            let jobs = c.jobs.get_untracked();
-            c.shots.update(|v| {
-                let loc = l.as_ref().map(|l| l.name.clone()).unwrap_or_default();
-                v.insert(0, Shot { key, thumb: String::new(), loc, qty: q, sort, state: ShotState::Preparing });
-                trim(v, &jobs);
-            });
-            let l = l.clone();
-            spawn_local(async move {
-                let blob: Blob = file.into();
-                if let Ok(t) = downscale(&blob, 160.0, 0.7).await {
-                    let url = web_sys::Url::create_object_url_with_blob(&t).unwrap_or_default();
-                    c.shots.update(|v| {
-                        if let Some(s) = v.iter_mut().find(|s| s.key == key) {
-                            s.thumb = url;
-                        }
-                    });
-                }
-                match downscale(&blob, 1600.0, 0.85).await {
-                    Ok(small) => {
-                        PENDING.with(|p| p.borrow_mut().insert(key, (small, l, q)));
-                        send_shot(c, key);
-                    }
-                    Err(e) => set_state(c, key, ShotState::Failed(format!("couldn't read photo: {e}"))),
-                }
-            });
-        }
-        input.set_value("");
+        let ready: Vec<TrayPhoto> = c.tray.get_untracked().into_iter().filter(|p| p.ready).collect();
+        let blobs: Vec<Blob> = TRAY_BLOBS.with(|b| {
+            let mut b = b.borrow_mut();
+            ready.iter().filter_map(|p| b.remove(&p.key)).collect()
+        });
+        discard_tray(); // also drops photos that failed to read
+        let (key, q) = (next_key(), qty.get_untracked());
+        let jobs = c.jobs.get_untracked();
+        c.shots.update(|v| {
+            let loc = l.as_ref().map(|l| l.name.clone()).unwrap_or_default();
+            let thumb = ready[0].thumb.clone();
+            v.insert(0, Shot { key, thumb, loc, qty: q, photos: blobs.len() as u32, sort, state: ShotState::Preparing });
+            trim(v, &jobs);
+        });
+        PENDING.with(|p| p.borrow_mut().insert(key, (blobs, l, q)));
+        send_shot(c, key);
         set_qty.set(1);
     };
 
@@ -695,10 +756,45 @@ fn App() -> impl IntoView {
                 </button>
             </Show>
 
-            <label class="shutter" class:disabled=move || tab.get() == Tab::Store && loc.get().is_none()>
+            <Show when=move || !c.tray.get().is_empty()>
+                <div class="tray">
+                    <div class="hd">
+                        <span>{move || {
+                            let n = c.tray.get().len();
+                            format!("This item · {n} photo{}{}", if n == 1 { "" } else { "s" }, if n >= MAX_PHOTOS { " (max)" } else { "" })
+                        }}</span>
+                        <button class="discard" on:click=move |_| discard_tray()>"Discard"</button>
+                    </div>
+                    <div class="photos">
+                        <For each=move || c.tray.get() key=|p| (p.key, p.thumb.clone(), p.ready, p.error.is_some()) let:p>
+                            {
+                                let k = p.key;
+                                view! {
+                                    <div class="tp" class:bad=p.error.is_some() class:busy=!p.ready && p.error.is_none() title=p.error.clone().unwrap_or_default()>
+                                        <img src=p.thumb.clone() alt="" />
+                                        <button class="rm" aria-label="Remove photo" on:click=move |_| drop_from_tray(k)>"×"</button>
+                                    </div>
+                                }
+                            }
+                        </For>
+                    </div>
+                    <button class="save" disabled=move || tray_busy() || tray_usable() == 0 on:click=move |_| save_item()>
+                        {move || if tray_busy() { "Preparing photos…".to_string() } else { "✓ Save item".to_string() }}
+                    </button>
+                </div>
+            </Show>
+
+            <label class="shutter"
+                class:secondary=move || !c.tray.get().is_empty()
+                class:disabled=shutter_off>
                 <input type="file" accept="image/*" capture="environment" on:change=on_photo />
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
-                <span>{move || if tab.get() == Tab::Sort { "Snap & suggest" } else { "Snap" }}</span>
+                <span>{move || match (c.tray.get().len(), tab.get()) {
+                    (0, Tab::Sort) => "Snap & suggest".to_string(),
+                    (0, Tab::Store) => "Snap".to_string(),
+                    (n, _) if n >= MAX_PHOTOS => "Photo limit reached".to_string(),
+                    (n, _) => format!("Add photo ({}/{MAX_PHOTOS})", n + 1),
+                }}</span>
             </label>
 
             <div class="qty">

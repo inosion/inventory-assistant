@@ -12,6 +12,9 @@ All notable changes to this project are documented here. The format follows
   stock moves there (`POST api/jobs/{id}/file`). Waiting items stay in a *To store* list, filed ones move to *Stored*.
 - Duplicate check: a capture of a part already in InvenTree is merged into it (photo added as an attachment,
   qty added to its stock in the box) and the new part is removed. `DEDUP=off` disables it.
+- Several photos per item (up to 4): snaps collect in a tray and **Save item** sends them together. The model
+  sees all of them in one request (told they are the same item from different sides; 768 px each when more
+  than two). The first photo is the part image, the rest are attachments, also on a duplicate merge.
 - The capture logs persist across reloads, with server-side thumbnails (`GET api/thumb/{id}`): the last 100
   Store captures and the last 100 filed items. Older finished entries are pruned from the spool.
 
